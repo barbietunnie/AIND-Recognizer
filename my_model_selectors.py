@@ -77,7 +77,25 @@ class SelectorBIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        lowest_BIC, largest_num_data_pts = None, None
+        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                logL = self.base_model(num_data_pts).score(self.X, self.lengths)
+                logN = np.log(len(self.X))
+                p = num_data_pts * (num_data_pts-1) + 2 * len(self.X[0]) * num_data_pts
+                BIC = -2 * logL + p * logN
+
+                # The lower the BIC value the better the model
+                if lowest_BIC > BIC or lowest_BIC is None:
+                    lowest_BIC = BIC
+                    largest_num_data_pts = num_data_pts
+            except:
+                pass
+            
+        if largest_num_data_pts is None:
+            return self.base_model(self.n_constant)
+        else:
+            return self.base_model(largest_num_data_pts)
 
 
 class SelectorDIC(ModelSelector):
@@ -94,7 +112,38 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        highest_DIC, largest_num_data_pts = None, None
+        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                logPXi = self.base_model(log_P_X_i = self.base_model(num_components).score(self.X, self.lengths)).score(self.X, self.lengths)
+                # Sum of all log(P(X)) without i
+                sum_logPX = 0.
+                all_words = list(self.words.keys())
+                M = len(all_words)
+                words.remove(self.this_word)
+
+                for word in all_words:
+                    try:
+                        # All model selectors without i
+                        all_model_selectors = ModelSelector(self.words, self.hwords, word, self.n_constant, self.min_n_components, self.max_n_components, self.random_state, self.verbose)
+
+                        sum_logPX += all_model_selectors.base_model(num_data_pts).score(all_model_selectors.X, all_model_selectors.lengths)
+                    except:
+                        M = M - 1
+
+                DIC = logPXi - sum_logPX / (M - 1)
+
+                if highest_DIC < DIC or highest_DIC is None:
+                    highest_DIC = DIC
+                    largest_num_data_pts = num_data_pts
+            except:
+                pass
+            
+        if largest_num_data_pts is None:
+            return self.base_model(self.n_constant)
+        else:
+            return self.base_model(largest_num_data_pts)
+            
 
 
 class SelectorCV(ModelSelector):
@@ -106,4 +155,33 @@ class SelectorCV(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        # The best number of data points selected and highest average logL value
+        largest_num_data_pts, largest_avg_logL = None, None
+
+        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
+            logL_sum = 0.
+            logL_count = 0
+
+            try:
+                split_algorithm = KFold(3) # Use 3-folds
+                for cv_train_idx, cv_test_idx in split_algorithm.split(self.sequences):
+                    X, lengths = combine_sequences(cv_train_idx,self.sequences)
+
+                    try:
+                        logL_sum += self.base_model(num_data_pts).score(X, lengths)
+                        logL_count += 1
+                    except:
+                        pass
+
+                if logL_count > 0:
+                    avg_logL = logL_sum / logL_count
+                    if largest_avg_logL < avg_logL or largest_avg_logL is None:
+                        largest_avg_logL = avg_logL
+                        largest_num_data_pts = num_data_pts
+            except:
+                pass
+        
+        if largest_num_data_pts is None:
+            return self.base_model(self.n_constant)
+        else:
+            return self.base_model(largest_num_data_pts)
