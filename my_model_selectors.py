@@ -69,34 +69,30 @@ class SelectorBIC(ModelSelector):
     """
 
     def select(self):
-        """ select the best model for self.this_word based on
-        BIC score for n between self.min_n_components and self.max_n_components
-
+        """ Select best model for self.this_word based on BIC score
+        for n between self.min_n_components and self.max_n_components
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on BIC scores
-        lowest_BIC, largest_num_data_pts = None, None
-        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
+        bic_scores = []
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
             try:
-                logL = self.base_model(num_data_pts).score(self.X, self.lengths)
-                logN = np.log(len(self.X))
-                p = num_data_pts * (num_data_pts-1) + 2 * len(self.X[0]) * num_data_pts
-                BIC = -2 * logL + p * logN
-
-                # The lower the BIC value the better the model
-                if lowest_BIC > BIC or lowest_BIC is None:
-                    lowest_BIC = BIC
-                    largest_num_data_pts = num_data_pts
+                hmm_model = self.base_model(num_states)
+                log_likelihood = hmm_model.score(self.X, self.lengths)
+                num_data_points = sum(self.lengths)
+                num_params = ( num_states ** 2 ) + ( 2 * num_states * num_data_points ) - 1
+                bic_score = (-2 * log_likelihood) + (num_params * np.log(num_data_points))
+                bic_scores.append(tuple([bic_score, hmm_model]))
             except:
                 pass
-            
-        if largest_num_data_pts is None:
-            return self.base_model(self.n_constant)
-        else:
-            return self.base_model(largest_num_data_pts)
 
+        if bic_scores:
+            best_bic_score = min(bic_scores, key = lambda x: x[0])[1]
+        else:
+            best_bic_score = None
+        
+        return best_bic_score
 
 class SelectorDIC(ModelSelector):
     ''' select best model based on Discriminative Information Criterion
@@ -110,39 +106,36 @@ class SelectorDIC(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
 
         # TODO implement model selection based on DIC scores
-        highest_DIC, largest_num_data_pts = None, None
-        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
-            try:
-                logPXi = self.base_model(log_P_X_i = self.base_model(num_components).score(self.X, self.lengths)).score(self.X, self.lengths)
-                # Sum of all log(P(X)) without i
-                sum_logPX = 0.
-                all_words = list(self.words.keys())
-                M = len(all_words)
-                words.remove(self.this_word)
+        other_words = []
+        dic_models = []
+        dic_scores = []
 
-                for word in all_words:
-                    try:
-                        # All model selectors without i
-                        all_model_selectors = ModelSelector(self.words, self.hwords, word, self.n_constant, self.min_n_components, self.max_n_components, self.random_state, self.verbose)
+        for word in self.words:
+            if word != self.this_word:
+                other_words.append(self.hwords[word])
+        
+        try:
+            for num_states in range(self.min_n_components, self.max_n_components + 1):
+                hmm_model = self.base_model(num_states)
+                initial_word_log_likelihood = hmm_model.score(self.X, self.lengths)
+                dic_models.append((initial_word_log_likelihood, hmm_model))
+        except:
+            pass
 
-                        sum_logPX += all_model_selectors.base_model(num_data_pts).score(all_model_selectors.X, all_model_selectors.lengths)
-                    except:
-                        M = M - 1
+        for _, dic_model in enumerate(dic_models):
+            initial_word_log_likelihood, hmm_model = dic_model
+            dic_score = initial_word_log_likelihood - np.mean([dic_model[1].score(word[0], word[1]) for word in other_words])
+            dic_scores.append(tuple([dic_score, dic_model[1]]))
 
-                DIC = logPXi - sum_logPX / (M - 1)
-
-                if highest_DIC < DIC or highest_DIC is None:
-                    highest_DIC = DIC
-                    largest_num_data_pts = num_data_pts
-            except:
-                pass
-            
-        if largest_num_data_pts is None:
-            return self.base_model(self.n_constant)
+        if dic_scores:
+            best_dic_score = max(dic_scores, key = lambda x: x[0])[1]
         else:
-            return self.base_model(largest_num_data_pts)
+            best_dic_score = None
+
+        return best_dic_score
             
 
 
@@ -153,35 +146,40 @@ class SelectorCV(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection using CV
-        # The best number of data points selected and highest average logL value
-        largest_num_data_pts, largest_avg_logL = None, None
-
-        for num_data_pts in range(self.min_n_components, self.max_n_components + 1):
-            logL_sum = 0.
-            logL_count = 0
-
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        
+        split_method = KFold(n_splits = 3) # Use 3-folds
+        log_likelihoods = []
+        score_cvs = []
+        
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
             try:
-                split_algorithm = KFold(3) # Use 3-folds
-                for cv_train_idx, cv_test_idx in split_algorithm.split(self.sequences):
-                    X, lengths = combine_sequences(cv_train_idx,self.sequences)
+                # Check if there's sufficient data
+                if len(self.sequences) > 2:
+                    for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                        # Recombine training sequences split using KFold
+                        self.X, self.lengths = combine_sequences(cv_train_idx, self.sequences)
 
-                    try:
-                        logL_sum += self.base_model(num_data_pts).score(X, lengths)
-                        logL_count += 1
-                    except:
-                        pass
+                        # Recombine test sequences split using KFold
+                        X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
 
-                if logL_count > 0:
-                    avg_logL = logL_sum / logL_count
-                    if largest_avg_logL < avg_logL or largest_avg_logL is None:
-                        largest_avg_logL = avg_logL
-                        largest_num_data_pts = num_data_pts
+                        hmm_model = self.base_model(num_states)
+                        log_likelihood = hmm_model.score(X_test, lengths_test)
+                else:
+                    hmm_model = self.base_model(num_states)
+                    log_likelihood = hmm_model.score(self.X, self.lengths)
+                
+                log_likelihoods.append(log_likelihood)
+
+                # Find the average of the log Likelihood of CV fold
+                score_cvs_avg = np.mean(log_likelihoods)
+                score_cvs.append(tuple([score_cvs_avg, hmm_model]))
             except:
                 pass
-        
-        if largest_num_data_pts is None:
-            return self.base_model(self.n_constant)
+
+        if score_cvs:
+            best_score_cv = max(score_cvs, key = lambda x: x[0])[1]
         else:
-            return self.base_model(largest_num_data_pts)
+            best_score_cv = None
+
+        return best_score_cv

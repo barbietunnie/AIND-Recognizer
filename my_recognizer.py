@@ -20,6 +20,25 @@ def recognize(models: dict, test_set: SinglesData):
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     probabilities = []
     guesses = []
+
     # TODO implement the recognizer
-    # return probabilities, guesses
-    raise NotImplementedError
+    for idx in range(test_set.num_items):
+    # for item in test_set.get_all_sequences():
+        # X, lengths = test_set.get_item_Xlengths(item)
+        X, lengths = test_set.get_item_Xlengths(idx)
+        scores, highest_score, best_guess = {}, None, None
+
+        for word, model in models.items():
+            try:
+                model_score = model.score(X, lengths)
+                scores[word] = model_score
+            except:
+                # scores[word] = None
+                scores[word] = float("-inf") # only numbers can be ordered in the max() function below
+        
+        probabilities.append(scores)
+        guesses.append(max(scores, key = scores.get))
+
+    
+    return probabilities, guesses
+    
