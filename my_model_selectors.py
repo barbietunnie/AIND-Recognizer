@@ -79,10 +79,12 @@ class SelectorBIC(ModelSelector):
         for num_states in range(self.min_n_components, self.max_n_components + 1):
             try:
                 hmm_model = self.base_model(num_states)
-                log_likelihood = hmm_model.score(self.X, self.lengths)
-                num_data_points = sum(self.lengths)
-                num_params = ( num_states ** 2 ) + ( 2 * num_states * num_data_points ) - 1
-                bic_score = (-2 * log_likelihood) + (num_params * np.log(num_data_points))
+                #logL = log likelihood
+                logL = hmm_model.score(self.X, self.lengths)
+                num_features = self.X.shape[1]
+                num_params = num_states * (num_states - 1) + 2 * num_states * num_features
+                logN = np.log(self.X.shape[0])
+                bic_score = (-2 * logL) + (num_params * logN)
                 bic_scores.append(tuple([bic_score, hmm_model]))
             except:
                 pass
@@ -90,7 +92,7 @@ class SelectorBIC(ModelSelector):
         if bic_scores:
             best_bic_score = min(bic_scores, key = lambda x: x[0])[1]
         else:
-            best_bic_score = None
+            best_bic_score = self.base_model(self.n_constant)
         
         return best_bic_score
 
@@ -114,6 +116,7 @@ class SelectorDIC(ModelSelector):
         dic_scores = []
 
         for word in self.words:
+            # Focus on competing words only
             if word != self.this_word:
                 other_words.append(self.hwords[word])
         
@@ -133,7 +136,7 @@ class SelectorDIC(ModelSelector):
         if dic_scores:
             best_dic_score = max(dic_scores, key = lambda x: x[0])[1]
         else:
-            best_dic_score = None
+            best_dic_score = self.base_model(self.n_constant)
 
         return best_dic_score
             
@@ -144,42 +147,42 @@ class SelectorCV(ModelSelector):
 
     '''
 
+    NUM_SPLITS = 3
+
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         warnings.filterwarnings("ignore", category=RuntimeWarning)
         
-        split_method = KFold(n_splits = 3) # Use 3-folds
-        log_likelihoods = []
-        score_cvs = []
+        best_score, best_model = float("-inf"), None
         
         for num_states in range(self.min_n_components, self.max_n_components + 1):
+            scores = []
+            model, log_likelihood = None, None
+
+            # Check if there's sufficient data, otherwise return the base model
+            if len(self.sequences) < SelectorCV.NUM_SPLITS:
+                break
+
             try:
-                # Check if there's sufficient data
-                if len(self.sequences) > 2:
-                    for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
-                        # Recombine training sequences split using KFold
-                        self.X, self.lengths = combine_sequences(cv_train_idx, self.sequences)
-
-                        # Recombine test sequences split using KFold
-                        X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
-
-                        hmm_model = self.base_model(num_states)
-                        log_likelihood = hmm_model.score(X_test, lengths_test)
-                else:
-                    hmm_model = self.base_model(num_states)
-                    log_likelihood = hmm_model.score(self.X, self.lengths)
+                split_method = KFold(random_state = self.random_state, n_splits = SelectorCV.NUM_SPLITS) # Use 3-folds
                 
-                log_likelihoods.append(log_likelihood)
+                for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                    # Recombine training sequences split using KFold
+                    self.X, self.lengths = combine_sequences(cv_train_idx, self.sequences)
+
+                    # Recombine test sequences split using KFold
+                    X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+
+                    hmm_model = self.base_model(num_states)
+                    log_likelihood = hmm_model.score(X_test, lengths_test)
+                    scores.append(log_likelihood)
 
                 # Find the average of the log Likelihood of CV fold
-                score_cvs_avg = np.mean(log_likelihoods)
-                score_cvs.append(tuple([score_cvs_avg, hmm_model]))
+                score_avg = np.mean(scores) if len(scores) > 0 else float("-inf")
+                if score_avg > best_score:
+                    best_score = score_avg
+                    best_model = hmm_model
             except:
                 pass
 
-        if score_cvs:
-            best_score_cv = max(score_cvs, key = lambda x: x[0])[1]
-        else:
-            best_score_cv = None
-
-        return best_score_cv
+        return best_model if best_model is not None else self.base_model(self.n_constant)
